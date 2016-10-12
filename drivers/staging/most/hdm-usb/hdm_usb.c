@@ -695,6 +695,15 @@ static int hdm_configure_channel(struct most_interface *iface, int channel,
 			  - conf->buffer_size;
 exit:
 	mdev->conf[channel] = *conf;
+
+	if (conf->direction == MOST_CH_RX && conf->data_type == MOST_CH_ASYNC) {
+		struct usb_device *usb_dev = mdev->usb_device;
+		int pipe = usb_rcvbulkpipe(usb_dev, mdev->ep_address[channel]);
+
+		if (usb_clear_halt(usb_dev, pipe))
+			dev_err(dev, "failed to reset endpoint\n");
+	}
+
 	return 0;
 }
 

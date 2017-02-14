@@ -1,0 +1,99 @@
+most: enable deregistration of the built-in i2c platform driver
+
+This patch enables the deregistration of the imx6q i2c platform device
+that is registered in the built-in module.
+
+To deregister the device just load a kernel object that is built from
+the i2c_plat_unloader.c.  Correspondingly, to register the device back
+unload this kernel object.
+
+Signed-off-by: Andrey Shvetsov <andrey.shvetsov@k2l.de>
+
+diff --git a/drivers/staging/most/hdm-i2c/platform/i2c_plat_unloader.c b/drivers/staging/most/hdm-i2c/platform/i2c_plat_unloader.c
+new file mode 100644
+index 0000000..b09b83b
+--- /dev/null
++++ b/drivers/staging/most/hdm-i2c/platform/i2c_plat_unloader.c
+@@ -0,0 +1,34 @@
++/*
++ * i2c_plat_unloader.c
++ *
++ * Copyright (C) 2017, Microchip Technology Germany II GmbH & Co. KG
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * This file is licensed under GPLv2.
++ */
++
++#include <linux/module.h>
++
++extern int i2c_register_dev_hack(void);
++extern void i2c_unregister_dev_hack(void);
++
++static int __init i2c_unloader_init(void)
++{
++	i2c_unregister_dev_hack();
++	return 0;
++}
++
++static void __exit i2c_unloader_exit(void)
++{
++	i2c_register_dev_hack();
++}
++
++module_init(i2c_unloader_init);
++module_exit(i2c_unloader_exit);
++
++MODULE_DESCRIPTION("I2C Platform Dependent Module Unloader");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/staging/most/hdm-i2c/platform/plat_imx6q.c b/drivers/staging/most/hdm-i2c/platform/plat_imx6q.c
+index 9ddcf93..c786ed5 100644
+--- a/drivers/staging/most/hdm-i2c/platform/plat_imx6q.c
++++ b/drivers/staging/most/hdm-i2c/platform/plat_imx6q.c
+@@ -32,13 +32,11 @@
+ 
+ struct i2c_client *client;
+ 
+-static int __init imx6q_i2c_init(void)
++int i2c_register_dev_hack(void)
+ {
+ 	struct i2c_adapter *i2c_adapter;
+ 	int ret = -ENODEV;
+ 
+-	pr_info("imx6q_i2c_init()\n");
+-
+ 	i2c_adapter = i2c_get_adapter(IMX6Q_INIC_I2C_BUS);
+ 	if (!i2c_adapter) {
+ 		pr_err("Failed to get i2c adapter %d\n", IMX6Q_INIC_I2C_BUS);
+@@ -62,12 +60,26 @@ static int __init imx6q_i2c_init(void)
+ 	i2c_put_adapter(i2c_adapter);
+ 	return ret;
+ }
++EXPORT_SYMBOL(i2c_register_dev_hack);
++
++void i2c_unregister_dev_hack(void)
++{
++	i2c_unregister_device(client);
++}
++EXPORT_SYMBOL(i2c_unregister_dev_hack);
++
++static int __init imx6q_i2c_init(void)
++{
++	pr_info("imx6q_i2c_init()\n");
++
++	return i2c_register_dev_hack();
++}
+ 
+ static void __exit imx6q_i2c_exit(void)
+ {
+ 	pr_info("imx6q_i2c_exit()\n");
+-
+-	i2c_unregister_device(client);
++	if (client)
++		i2c_unregister_dev_hack();
+ }
+ 
+ module_init(imx6q_i2c_init);

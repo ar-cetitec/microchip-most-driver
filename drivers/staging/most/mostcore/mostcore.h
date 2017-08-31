@@ -272,6 +272,7 @@ struct mbo {
  */
 struct most_interface {
 	struct module *mod;
+	struct device *dev;
 	enum most_interface_type interface;
 	const char *description;
 	int num_channels;

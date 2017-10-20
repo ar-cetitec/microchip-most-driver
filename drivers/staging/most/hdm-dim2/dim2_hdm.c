@@ -191,45 +191,6 @@ static int get_dim2_clk_speed(char *clock_speed)
 }
 
 /**
- * startup_dim - initialize the dim2 interface
- * @pdev: platform device
- *
- * Get the value of command line parameter "clock_speed" if given or use the
- * default value, enable the clock and PLL, and initialize the dim2 interface.
- */
-static int startup_dim(struct platform_device *pdev)
-{
-	struct dim2_hdm *dev = platform_get_drvdata(pdev);
-	struct dim2_platform_data *pdata = pdev->dev.platform_data;
-	u8 hal_ret;
-
-	dev->clk_speed = get_dim2_clk_speed(clock_speed);
-	if (dev->clk_speed == -1) {
-		pr_info("Bad or missing clock speed parameter, using default value: 3072fs\n");
-		dev->clk_speed = CLK_3072FS;
-	} else {
-		pr_info("Selected clock speed: %s\n", clock_speed);
-	}
-	if (pdata && pdata->init) {
-		int ret = pdata->init(pdata, dev->io_base, dev->clk_speed);
-
-		if (ret)
-			return ret;
-	}
-
-	pr_info("sync: num of frames per sub-buffer: %u\n", fcnt);
-	hal_ret = dim_startup(dev->io_base, dev->clk_speed, fcnt);
-	if (hal_ret != DIM_NO_ERROR) {
-		pr_err("dim_startup failed: %d\n", hal_ret);
-		if (pdata && pdata->destroy)
-			pdata->destroy(pdata);
-		return -ENODEV;
-	}
-
-	return 0;
-}
-
-/**
  * try_start_dim_transfer - try to transfer a buffer on a channel
  * @hdm_ch: channel specific data
  *
@@ -761,56 +722,81 @@ static void dma_free(struct mbo *mbo, u32 size)
  */
 static int dim2_probe(struct platform_device *pdev)
 {
+	struct dim2_platform_data *pdata = pdev->dev.platform_data;
 	struct dim2_hdm *dev;
 	struct resource *res;
 	int ret, i;
 	struct kobject *kobj;
+	u8 hal_ret;
 	int irq;
 
 	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
 
-	dev->atx_idx = -1;
-
 	platform_set_drvdata(pdev, dev);
+	dev->atx_idx = -1;
+	dev->clk_speed = get_dim2_clk_speed(clock_speed);
+	if (dev->clk_speed < 0) {
+		dev_err(&pdev->dev, "bad or missing clock_speed parameter\n");
+		return -EFAULT;
+	}
+	dev_info(&pdev->dev, "clock speed: %s\n", clock_speed);
+
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	dev->io_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(dev->io_base))
 		return PTR_ERR(dev->io_base);
 
+	ret = pdata && pdata->init ?
+		pdata->init(pdata, dev->io_base, dev->clk_speed) : 0;
+	if (ret)
+		return ret;
+
+	dev_info(&pdev->dev, "sync: num of frames per sub-buffer: %u\n", fcnt);
+	hal_ret = dim_startup(dev->io_base, dev->clk_speed, fcnt);
+	if (hal_ret != DIM_NO_ERROR) {
+		dev_err(&pdev->dev, "dim_startup failed: %d\n", hal_ret);
+		ret = -ENODEV;
+		goto err_bsp_destroy;
+	}
+
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		dev_err(&pdev->dev, "failed to get ahb0_int irq\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_shutdown_dim;
 	}
 
 	ret = devm_request_irq(&pdev->dev, irq, dim2_ahb_isr, 0,
 			       "dim2_ahb0_int", dev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request ahb0_int irq %d\n", irq);
-		return ret;
+		goto err_shutdown_dim;
 	}
 
 	irq = platform_get_irq(pdev, 1);
 	if (irq < 0) {
 		dev_err(&pdev->dev, "failed to get mlb_int irq\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_shutdown_dim;
 	}
 
 	ret = devm_request_irq(&pdev->dev, irq, dim2_mlb_isr, 0,
 			       "dim2_mlb_int", dev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request mlb_int irq %d\n", irq);
-		return ret;
+		goto err_shutdown_dim;
 	}
 
 	init_waitqueue_head(&dev->netinfo_waitq);
 	dev->deliver_netinfo = 0;
-	dev->netinfo_task = kthread_run(&deliver_netinfo_thread, (void *)dev,
+	dev->netinfo_task = kthread_run(&deliver_netinfo_thread, dev,
 					"dim2_netinfo");
-	if (IS_ERR(dev->netinfo_task))
-		return PTR_ERR(dev->netinfo_task);
+	if (IS_ERR(dev->netinfo_task)) {
+		ret = PTR_ERR(dev->netinfo_task);
+		goto err_shutdown_dim;
+	}
 
 	for (i = 0; i < DMA_CHANNELS; i++) {
 		struct most_channel_capability *cap = dev->capabilities + i;
@@ -866,20 +852,17 @@ static int dim2_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_unreg_iface;
 
-	ret = startup_dim(pdev);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to initialize DIM2\n");
-		goto err_destroy_bus;
-	}
-
 	return 0;
 
-err_destroy_bus:
-	dim2_sysfs_destroy(&dev->bus);
 err_unreg_iface:
 	most_deregister_interface(&dev->most_iface);
 err_stop_thread:
 	kthread_stop(dev->netinfo_task);
+err_shutdown_dim:
+	dim_shutdown();
+err_bsp_destroy:
+	if (pdata && pdata->destroy)
+		pdata->destroy(pdata);
 
 	return ret;
 }
@@ -896,16 +879,16 @@ static int dim2_remove(struct platform_device *pdev)
 	struct dim2_platform_data *pdata = pdev->dev.platform_data;
 	unsigned long flags;
 
+	dim2_sysfs_destroy(&dev->bus);
+	most_deregister_interface(&dev->most_iface);
+	kthread_stop(dev->netinfo_task);
+
 	spin_lock_irqsave(&dim_lock, flags);
 	dim_shutdown();
 	spin_unlock_irqrestore(&dim_lock, flags);
 
 	if (pdata && pdata->destroy)
 		pdata->destroy(pdata);
-
-	dim2_sysfs_destroy(&dev->bus);
-	most_deregister_interface(&dev->most_iface);
-	kthread_stop(dev->netinfo_task);
 
 	/*
 	 * break link to local platform_device_id struct

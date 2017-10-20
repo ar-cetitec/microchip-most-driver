@@ -161,6 +161,36 @@ void dimcb_on_error(u8 error_id, const char *error_message)
 }
 
 /**
+ * get_dim2_clk_speed - converts string to DIM2 clock speed value
+ *
+ * @clock_speed: string in the format "{NUMBER}fs"
+ *
+ * returns one of the CLK_{NUMBER}FS or negative value in case of error
+ */
+static int get_dim2_clk_speed(char *clock_speed)
+{
+	if (!clock_speed)
+		return -1;
+	if (!strcmp(clock_speed, "256fs"))
+		return CLK_256FS;
+	if (!strcmp(clock_speed, "512fs"))
+		return CLK_512FS;
+	if (!strcmp(clock_speed, "1024fs"))
+		return CLK_1024FS;
+	if (!strcmp(clock_speed, "2048fs"))
+		return CLK_2048FS;
+	if (!strcmp(clock_speed, "3072fs"))
+		return CLK_3072FS;
+	if (!strcmp(clock_speed, "4096fs"))
+		return CLK_4096FS;
+	if (!strcmp(clock_speed, "6144fs"))
+		return CLK_6144FS;
+	if (!strcmp(clock_speed, "8192fs"))
+		return CLK_8192FS;
+	return -1;
+}
+
+/**
  * startup_dim - initialize the dim2 interface
  * @pdev: platform device
  *
@@ -173,27 +203,7 @@ static int startup_dim(struct platform_device *pdev)
 	struct dim2_platform_data *pdata = pdev->dev.platform_data;
 	u8 hal_ret;
 
-	dev->clk_speed = -1;
-
-	if (clock_speed) {
-		if (!strcmp(clock_speed, "256fs"))
-			dev->clk_speed = CLK_256FS;
-		else if (!strcmp(clock_speed, "512fs"))
-			dev->clk_speed = CLK_512FS;
-		else if (!strcmp(clock_speed, "1024fs"))
-			dev->clk_speed = CLK_1024FS;
-		else if (!strcmp(clock_speed, "2048fs"))
-			dev->clk_speed = CLK_2048FS;
-		else if (!strcmp(clock_speed, "3072fs"))
-			dev->clk_speed = CLK_3072FS;
-		else if (!strcmp(clock_speed, "4096fs"))
-			dev->clk_speed = CLK_4096FS;
-		else if (!strcmp(clock_speed, "6144fs"))
-			dev->clk_speed = CLK_6144FS;
-		else if (!strcmp(clock_speed, "8192fs"))
-			dev->clk_speed = CLK_8192FS;
-	}
-
+	dev->clk_speed = get_dim2_clk_speed(clock_speed);
 	if (dev->clk_speed == -1) {
 		pr_info("Bad or missing clock speed parameter, using default value: 3072fs\n");
 		dev->clk_speed = CLK_3072FS;
